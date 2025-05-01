@@ -1,0 +1,237 @@
+# Определяем пути
+2.	$zabbixMsiPath = "$PSScriptRoot\zabbix_agent-7.2.5-windows-amd64-openssl.msi"
+3.	$wiresharkInstaller = "$PSScriptRoot\Wireshark-4.4.5-x64.exe"
+4.	$zabbixInstallPath = "C:\Program Files\Zabbix Agent"
+5.	$scriptPath = "$zabbixInstallPath\skripts"
+6.	$configPath = "$zabbixInstallPath\zabbix_agentd.d\userparam.conf"
+7.	
+8.	# Проверка и установка Zabbix Agent
+9.	$zabbixService = Get-Service -Name "Zabbix Agent" -ErrorAction SilentlyContinue
+10.	if (-not $zabbixService) {
+11.	    Write-Host " Устанавливаем Zabbix Agent..."
+12.	    Start-Process msiexec.exe -ArgumentList "/i `"$zabbixMsiPath`" /quiet /norestart" -Wait -NoNewWindow
+13.	    Write-Host "✅ Zabbix Agent установлен!"
+14.	} else {
+15.	    Write-Host "✅ Zabbix Agent уже установлен."
+16.	}
+17.	
+18.	# Установка Wireshark (если не установлен)
+19.	$wiresharkPath = "C:\Program Files\Wireshark\tshark.exe"
+20.	if (-not (Test-Path $wiresharkPath)) {
+21.	    Write-Host " Устанавливаем Wireshark..."
+22.	    Start-Process -FilePath $wiresharkInstaller -ArgumentList "/S" -Wait -NoNewWindow
+23.	    Write-Host "✅ Wireshark установлен!"
+24.	} else {
+25.	    Write-Host "✅ Wireshark уже установлен."
+26.	}
+27.	
+28.	# Создание папки для скриптов
+29.	if (-not (Test-Path -Path $scriptPath)) {
+30.	    New-Item -Path $scriptPath -ItemType Directory -Force | Out-Null
+31.	    Write-Host "📂 Папка скриптов создана: $scriptPath"
+32.	}
+33.	
+34.	# Все скрипты
+35.	$scriptFiles = @{
+36.	
+37.	"clear_logbook.ps1" = @'
+38.	function Check-ClearLogbookEvent {
+39.	    try {
+40.	        $clear_logbook = Get-WinEvent -LogName Security -FilterXPath "*[System[(EventID=1102)]]" -ErrorAction Stop
+41.	        return $clear_logbook.Count -gt 0 ? 1 : 0
+42.	    } catch {
+43.	        return -1
+44.	    }
+45.	}
+46.	$result = Check-ClearLogbookEvent
+47.	Write-Output $result
+48.	'@
+49.	
+50.	"firewall_status.ps1" = @'
+51.	$firewallStatus = Get-NetFirewallProfile | Select-Object -ExpandProperty Enabled
+52.	$disabledCount = ($firewallStatus | Where-Object {$_ -eq $false}).Count
+53.	Write-Output $disabledCount
+54.	'@
+55.	
+56.	"rdp_sessions.ps1" = @'
+57.	$rdp_sessions = (quser | Select-String "rdp-tcp").Count
+58.	Write-Output $rdp_sessions
+59.	'@
+60.	
+61.	"ssh_sessions.ps1" = @'
+62.	$ssh_sessions = (netstat -an | Select-String ":22" | Select-String "ESTABLISHED").Count
+63.	Write-Output $ssh_sessions
+64.	'@
+65.	
+66.	"Win_Def_Status.ps1" = @'
+67.	$defenderStatus = Get-MpPreference
+68.	Write-Output ($defenderStatus.DisableRealtimeMonitoring -eq $true ? 1 : 0)
+69.	'@
+70.	
+71.	"winrm_monitor.ps1" = @'
+72.	$winrm_processes = (Get-Process | Where-Object { $_.ProcessName -eq "wsmprovhost" }).Count
+73.	Write-Output $winrm_processes
+74.	'@
+75.	
+76.	"winrshost_monitor.ps1" = @'
+77.	$process = Get-Process | Where-Object { $_.ProcessName -eq "winrshost" }
+78.	Write-Output $process.Count
+79.	'@
+80.	
+81.	"audit_policy_change.ps1" = @'
+82.	$timeThreshold = (Get-Date).AddMinutes(-1)
+83.	$events = Get-WinEvent -FilterHashtable @{
+84.	    LogName = "Security";
+85.	    ID = 4719;
+86.	    StartTime = $timeThreshold
+87.	} -ErrorAction SilentlyContinue
+88.	Write-Output ($events ? "Audit policy changed detected" : "1")
+89.	'@
+90.	
+91.	"New_Apps.ps1" = @'
+92.	$logName = "Microsoft-Windows-Sysmon/Operational"
+93.	$events = Get-WinEvent -LogName $logName | Where-Object { $_.Id -eq 12 }
+94.	$uninstallEvents = $events | ForEach-Object {
+95.	    $eventXml = ([xml]$_.ToXml()).Event.EventData.Data
+96.	    $targetObject = ($eventXml | Where-Object { $_.Name -eq "TargetObject" }).'#text'
+97.	    if ($targetObject -match "\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\") {
+98.	        Write-Output "New application detected"
+99.	    }
+100.	}
+101.	Write-Output ($uninstallEvents.Count -gt 0 ? $uninstallEvents : "No new applications")
+102.	'@
+103.	
+104.	"count_copy_events.ps1" = @'
+105.	$eventID = 4663
+106.	$copyCount = 0
+107.	$timeLimit = (Get-Date).AddMinutes(-5)
+108.	try {
+109.	    $events = Get-WinEvent -FilterHashtable @{LogName = 'Security'; Id = $eventID; StartTime = $timeLimit} -ErrorAction Stop
+110.	    foreach ($event in $events) {
+111.	        $message = $event.Message
+112.	        if ($message -match "Object Type:\s+File" -and $message -match "Accesses:\s+(.*)") {
+113.	            $access = $matches[1]
+114.	            if ($access -match "WriteData|CreateFile|AppendData") {
+115.	                $copyCount++
+116.	            }
+117.	        }
+118.	    }
+119.	} catch {
+120.	    $copyCount = 0
+121.	}
+122.	Write-Output $copyCount
+123.	'@
+124.	
+125.	"wireshark.ps1" = @'
+126.	$tsharkPath = "C:\Program Files\Wireshark\tshark.exe"
+127.	$interface = "Ethernet"
+128.	$synThreshold = 100
+129.	$tcpThreshold = 1000
+130.	$tcpAckThreshold = 800
+131.	$tcpRstThreshold = 100
+132.	$udpThreshold = 500
+133.	$icmpThreshold = 200
+134.	$duration = 10
+135.	
+136.	$tsharkOutput = & $tsharkPath -i $interface -a duration:$duration -Y "icmp or icmpv6 or tcp or udp" -T fields -e frame.protocols -e tcp.flags -e icmp.type -q 2>$null | Where-Object { $_ -ne "" }
+137.	$icmpCount = ($tsharkOutput -match "icmp").Count
+138.	$tcpDetails = $tsharkOutput | ForEach-Object {
+139.	    if ($_ -match "tcp") {
+140.	        $flags = $_.Split()[-1]
+141.	        [PSCustomObject]@{
+142.	            Type = "TCP"
+143.	            Flags = $flags
+144.	            IsSYN = ($flags -match "0x002")
+145.	            IsACK = ($flags -match "0x010")
+146.	            IsRST = ($flags -match "0x004")
+147.	        }
+148.	    }
+149.	}
+150.	$synCount = ($tcpDetails | Where-Object { $_.IsSYN }).Count
+151.	$ackCount = ($tcpDetails | Where-Object { $_.IsACK }).Count
+152.	$rstCount = ($tcpDetails | Where-Object { $_.IsRST }).Count
+153.	$tcpTotalCount = $tcpDetails.Count
+154.	$udpCount = ($tsharkOutput -match "udp").Count
+155.	$attackDetected = $false
+156.	if ($tcpTotalCount -gt $tcpThreshold) { Write-Output 1; $attackDetected = $true }
+157.	if ($udpCount -gt $udpThreshold) { Write-Output 1; $attackDetected = $true }
+158.	if ($icmpCount -gt $icmpThreshold) { Write-Output 1; $attackDetected = $true }
+159.	if (-not $attackDetected) { Write-Output 0 }
+160.	'@
+161.	
+162.	"network_adapters.ps1" = @'
+163.	$adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+164.	$internetAdapters = 0
+165.	foreach ($adapter in $adapters) {
+166.	    if ($adapter.DefaultIPGateway) {
+167.	        try {
+168.	            $socket = New-Object System.Net.Sockets.TcpClient
+169.	            $socket.Connect("8.8.8.8", 53)
+170.	            if ($socket.Connected) {
+171.	                $internetAdapters++
+172.	                $socket.Close()
+173.	            }
+174.	        } catch {}
+175.	    }
+176.	}
+177.	Write-Output $internetAdapters
+178.	'@
+179.	
+180.	"Lateness.ps1" = @'
+181.	param (
+182.	    [string]$WorkHoursStart = "07:00",
+183.	    [string]$WorkHoursEnd = "18:00",
+184.	    [int]$LookbackHours = 2
+185.	)
+186.	try {
+187.	    $now = Get-Date
+188.	    $startDate = $now.AddHours(-$LookbackHours)
+189.	    $startTime = [TimeSpan]::Parse($WorkHoursStart)
+190.	    $endTime = [TimeSpan]::Parse($WorkHoursEnd)
+191.	    $excludeUsers = "SYSTEM|LOCAL SERVICE|NETWORK SERVICE|ANONYMOUS LOGON"
+192.	    $events = Get-WinEvent -FilterHashtable @{LogName = 'Security'; ID = 4624; StartTime = $startDate} -MaxEvents 100 -ErrorAction Stop
+193.	    foreach ($event in $events) {
+194.	        $username = $event.Properties[5].Value
+195.	        $time = $event.TimeCreated.TimeOfDay
+196.	        if ($username -notmatch $excludeUsers) {
+197.	            if ($time -lt $startTime -or $time -gt $endTime) {
+198.	                Write-Output 1
+199.	                exit 0
+200.	            }
+201.	        }
+202.	    }
+203.	    Write-Output 0
+204.	} catch {
+205.	    Write-Output -1
+206.	    exit 1
+207.	}
+208.	'@
+209.	}
+210.	
+211.	# Сохраняем скрипты
+212.	foreach ($file in $scriptFiles.Keys) {
+213.	    $filePath = "$scriptPath\$file"
+214.	    $scriptFiles[$file] | Out-File -Encoding UTF8 $filePath -Force
+215.	}
+216.	
+217.	Write-Host "✅ Все PowerShell-скрипты записаны."
+218.	
+219.	# Создание userparam.conf
+220.	@"
+221.	UserParameter=rdp.sessions.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\rdp_sessions.ps1"
+222.	UserParameter=clear.logbook.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\clear_logbook.ps1"
+223.	UserParameter=firewall.status.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\firewall_status.ps1"
+224.	UserParameter=ssh.sessions.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\ssh_sessions.ps1"
+225.	UserParameter=new.apps.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\New_Apps.ps1"
+226.	UserParameter=win.def.status,powershell -ExecutionPolicy Bypass -File "$scriptPath\Win_Def_Status.ps1"
+227.	UserParameter=audit.policy.changed,powershell -ExecutionPolicy Bypass -File "$scriptPath\audit_policy_change.ps1"
+228.	UserParameter=winrm.process.status,powershell -ExecutionPolicy Bypass -File "$scriptPath\winrm_monitor.ps1"
+229.	UserParameter=winrshost.process.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\winrshost_monitor.ps1"
+230.	UserParameter=copy.events.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\count_copy_events.ps1"
+231.	UserParameter=wireshark.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\wireshark.ps1"
+232.	UserParameter=network.adapters.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\network_adapters.ps1"
+233.	UserParameter=lateness.count,powershell -ExecutionPolicy Bypass -File "$scriptPath\Lateness.ps1"
+234.	"@ | Out-File -Encoding UTF8 $configPath -Force
+235.	
+236.	Write-Host "✅ Файл userparam.conf создан: $configPath"
+237.	Write-Host "🔁 Перезапустите Zabbix Agent для применения новых настроек."

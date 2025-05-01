@@ -1,0 +1,22 @@
+# Подсчёт физических адаптеров с доступом в интернет
+$adapters = Get-WmiObject -Class Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+
+$internetAdapters = 0
+
+foreach ($adapter in $adapters) {
+    if ($adapter.DefaultIPGateway) {
+        # Пробуем простое подключение через порт 53 (DNS) к 8.8.8.8, вместо Test-Connection
+        try {
+            $socket = New-Object System.Net.Sockets.TcpClient
+            $socket.Connect("8.8.8.8", 53)
+            if ($socket.Connected) {
+                $internetAdapters++
+                $socket.Close()
+            }
+        } catch {
+            # Ничего не делаем, если нет подключения
+        }
+    }
+}
+
+Write-Output $internetAdapters

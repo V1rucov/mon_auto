@@ -1,0 +1,56 @@
+---
+- name: Install Zabbix Agent on Windows Server
+  hosts: windows
+  gather_facts: no
+
+  vars:
+    zabbix_agent_url: "https://cdn.zabbix.com/zabbix/binaries/stable/6.0/6.0.25/zabbix_agent-6.0.25-windows-amd64-openssl.zip"
+    zabbix_agent_zip: "C:\\Temp\\zabbix_agent.zip"
+    zabbix_agent_dir: "C:\\zabbix_agent"
+    zabbix_server: "192.168.1.12"
+    zabbix_agent_service_name: "Zabbix Agent"
+
+  tasks:
+    - name: Create Temp Directory
+      win_file:
+        path: C:\Temp
+        state: directory
+
+    - name: Download Zabbix Agent zip
+      win_get_url:
+        url: "{{ zabbix_agent_url }}"
+        dest: "{{ zabbix_agent_zip }}"
+
+    - name: Extract Zabbix Agent zip
+      win_unzip:
+        src: "{{ zabbix_agent_zip }}"
+        dest: "{{ zabbix_agent_dir }}"
+        delete_archive: yes
+
+    - name: Install Zabbix Agent as service
+      win_command: >
+        {{ zabbix_agent_dir }}\\bin\\zabbix_agentd.exe
+        --config {{ zabbix_agent_dir }}\\conf\\zabbix_agentd.conf
+        --install
+      args:
+        chdir: "{{ zabbix_agent_dir }}\\bin"
+
+    - name: Configure Zabbix Agent config
+      win_lineinfile:
+        path: "{{ zabbix_agent_dir }}\\conf\\zabbix_agentd.conf"
+        regexp: '^Server='
+        line: "Server={{ zabbix_server }}"
+      register: server_line
+
+    - name: Ensure Hostname is properly set in config
+      win_lineinfile:
+        path: "{{ zabbix_agent_dir }}\\conf\\zabbix_agentd.conf"
+        regexp: '^Hostname='
+        line: "Hostname={{ ansible_hostname }}"
+      register: hostname_line
+
+    - name: Start Zabbix Agent Service
+      win_service:
+        name: "{{ zabbix_agent_service_name }}"
+        state: started
+        start_mode: auto

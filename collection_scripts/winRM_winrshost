@@ -1,0 +1,3 @@
+# Подсчет запущенных процессов winrshost
+$process = Get-Process | Where-Object { $_.ProcessName -eq "winrshost" }
+$process.Count

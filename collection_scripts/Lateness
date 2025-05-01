@@ -1,0 +1,42 @@
+param (
+    [string]$WorkHoursStart = "07:00",
+    [string]$WorkHoursEnd = "18:00",
+    [int]$LookbackHours = 2
+)
+
+try {
+    $now = Get-Date
+    $startDate = $now.AddHours(-$LookbackHours)
+
+    # Упрощённые временные рамки
+    $startTime = [TimeSpan]::Parse($WorkHoursStart)
+    $endTime = [TimeSpan]::Parse($WorkHoursEnd)
+
+    # Системные аккаунты игнорируются
+    $excludeUsers = "SYSTEM|LOCAL SERVICE|NETWORK SERVICE|ANONYMOUS LOGON"
+
+    # Быстрый фильтр событий входа
+    $events = Get-WinEvent -FilterHashtable @{
+        LogName = 'Security'
+        ID = 4624
+        StartTime = $startDate
+    } -MaxEvents 100 -ErrorAction Stop
+
+    foreach ($event in $events) {
+        $username = $event.Properties[5].Value
+        $time = $event.TimeCreated.TimeOfDay
+
+        if ($username -notmatch $excludeUsers) {
+            if ($time -lt $startTime -or $time -gt $endTime) {
+                Write-Output 1
+                exit 0
+            }
+        }
+    }
+
+    Write-Output 0
+}
+catch {
+    Write-Output -1
+    exit 1
+}

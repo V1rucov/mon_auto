@@ -1,0 +1,71 @@
+# Путь к tshark (проверьте ваш путь!)
+$tsharkPath = "C:\Program Files\Wireshark\tshark.exe"
+$interface = "Ethernet"  # Укажите ваш интерфейс (Get-NetAdapter)
+
+# Пороги для детектирования атак (настройте под вашу сеть)
+$synThreshold = 100    # SYN Flood
+$tcpThreshold = 1000   # Общий TCP Flood
+$tcpAckThreshold = 800 # ACK Flood
+$tcpRstThreshold = 100 # RST Flood
+$udpThreshold = 500    # UDP Flood
+$icmpThreshold = 200   # ICMP Flood
+
+# Время захвата (секунд)
+$duration = 10
+
+# --- Захватываем трафик за $duration секунд ---
+$tsharkOutput = & $tsharkPath -i $interface -a duration:$duration `
+    -Y "icmp or icmpv6 or tcp or udp" -T fields -e frame.protocols -e tcp.flags -e icmp.type `
+    -q 2>$null | Where-Object { $_ -ne "" }
+
+# --- Анализ ICMP-пакетов ---
+$icmpCount = ($tsharkOutput -match "icmp").Count
+
+# --- Анализ TCP-пакетов ---
+$tcpDetails = $tsharkOutput | ForEach-Object {
+    if ($_ -match "tcp") {
+        $flags = $_.Split()[-1]
+        [PSCustomObject]@{
+            Type = "TCP"
+            Flags = $flags
+            IsSYN = ($flags -match "0x002")  # SYN
+            IsACK = ($flags -match "0x010")  # ACK
+            IsRST = ($flags -match "0x004")  # RST
+        }
+    }
+}
+
+$synCount = ($tcpDetails | Where-Object { $_.IsSYN }).Count
+$ackCount = ($tcpDetails | Where-Object { $_.IsACK }).Count
+$rstCount = ($tcpDetails | Where-Object { $_.IsRST }).Count
+$tcpTotalCount = $tcpDetails.Count
+
+# --- Анализ UDP-пакетов ---
+$udpCount = ($tsharkOutput -match "udp").Count
+
+#Write-Output "Результаты сканирования ($duration сек):"
+#Write-Output "  TCP-пакетов: $tcpTotalCount (порог: $tcpThreshold)"
+#Write-Output "  UDP-пакетов: $udpCount (порог: $udpThreshold)"
+#Write-Output "  ICMP-пакетов: $icmpCount (порог: $icmpThreshold)"
+
+# --- Проверка на атаки ---
+$attackDetected = $false
+
+if ($tcpTotalCount -gt $tcpThreshold) {
+    Write-Output 1
+    $attackDetected = $true
+}
+
+if ($udpCount -gt $udpThreshold) {
+    Write-Output 1
+    $attackDetected = $true
+}
+
+if ($icmpCount -gt $icmpThreshold) {
+    Write-Output 1
+    $attackDetected = $true
+}
+
+if (-not $attackDetected) {
+    Write-Output 0
+}
