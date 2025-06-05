@@ -1,0 +1,49 @@
+- name: agent installation
+  hosts: all
+  gather_facts: no
+
+  vars:
+    zabbix_server_ip: "192.168.X.X"
+    zabbix_agent_install_path: "C:\\zabbix"
+    zabbix_agent_conf: "C:\\zabbix\\zabbix_agentd.conf"
+
+  tasks:
+    - name: dir
+      win_file:
+        path: "{{ zabbix_agent_install_path }}\\scripts"
+        state: directory
+
+    - name: copy
+      win_copy:
+        src: "files/{{ item }}"
+        dest: "{{ zabbix_agent_install_path }}\\scripts\\{{ item }}"
+      loop:
+        - audit_policy_change.ps1
+        - clear_logbook.ps1
+        - firewall_status.ps1
+        - rdp_sessions.ps1
+        - Win_Def_Status.ps1
+
+    - name: conf_gen
+      win_template:
+        src: files/zabbix_agentd.conf.j2
+        dest: "{{ zabbix_agent_conf }}"
+
+    - name: agent copy
+      win_copy:
+        src: files/zabbix_agent-7.2.0-windows-amd64-openssl.msi
+        dest: "{{ zabbix_agent_install_path }}\\zabbix_agent.msi"
+      when: false
+
+    - name: install agent
+      win_package:
+        path: "{{ zabbix_agent_install_path }}\\zabbix_agent.msi"
+        arguments: /quiet
+        state: present
+      when: false
+
+    - name: restart agent
+      win_service:
+        name: "Zabbix Agent"
+        state: restarted
+        start_mode: auto

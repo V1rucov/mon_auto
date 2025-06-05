@@ -1,0 +1,8 @@
+all:
+  hosts:
+    windows1.local:
+      ansible_user: Administrator
+      ansible_password: "StrongPassword123"
+      ansible_connection: winrm
+      ansible_port: 5986
+      ansible_winrm_server_cert_validation: ignore

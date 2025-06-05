@@ -1,0 +1,12 @@
+LogFile=c:\zabbix\zabbix_agentd.log
+Server={{ zabbix_server_ip }}
+ServerActive={{ zabbix_server_ip }}
+Hostname={{ inventory_hostname }}
+EnableRemoteCommands=1
+AllowKey=windows.*
+
+UserParameter=windows.audit.policychange,powershell -ExecutionPolicy Bypass -File "C:\zabbix\scripts\audit_policy_change.ps1"
+UserParameter=windows.securitylog.cleared,powershell -ExecutionPolicy Bypass -File "C:\zabbix\scripts\clear_logbook.ps1"
+UserParameter=windows.firewall.status,powershell -ExecutionPolicy Bypass -File "C:\zabbix\scripts\firewall_status.ps1"
+UserParameter=windows.interactive.logon.detected,powershell -ExecutionPolicy Bypass -File "C:\zabbix\scripts\rdp_sessions.ps1"
+UserParameter=windows.defender.status,powershell -ExecutionPolicy Bypass -File "C:\zabbix\scripts\Win_Def_Status.ps1"
